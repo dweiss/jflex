@@ -7,7 +7,7 @@
   <modelVersion>4.0.0</modelVersion>
   <artifactId>jflex</artifactId>
   <parent>
-    <groupId>de.jflex</groupId>
+    <groupId>com.carrotsearch.thirdparty.jflex</groupId>
     <artifactId>jflex-parent</artifactId>
     <version>1.10.0-SNAPSHOT</version>
     <relativePath>../pom.xml</relativePath>
@@ -110,7 +110,7 @@
         </executions>
       </plugin>
       <plugin>
-        <groupId>de.jflex</groupId>
+        <groupId>com.carrotsearch.thirdparty.jflex</groupId>
         <artifactId>cup-maven-plugin</artifactId>
         <executions>
           <execution>

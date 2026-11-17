@@ -11,7 +11,7 @@
   <build>
     <plugins>
       <plugin>
-        <groupId>de.jflex</groupId>
+        <groupId>com.carrotsearch.thirdparty.jflex</groupId>
         <artifactId>cup-maven-plugin</artifactId>
         <executions>
           <execution>

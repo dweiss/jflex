@@ -9,7 +9,7 @@
                              http://maven.apache.org/maven-v4_0_0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <groupId>de.jflex</groupId>
+    <groupId>com.carrotsearch.thirdparty.jflex</groupId>
     <artifactId>jflex-parent</artifactId>
     <version>1.10.0-SNAPSHOT</version>
     <relativePath>../../pom.xml</relativePath>
@@ -41,13 +41,13 @@
 
   <dependencies>
     <dependency>
-      <groupId>de.jflex</groupId>
+      <groupId>com.carrotsearch.thirdparty.jflex</groupId>
       <artifactId>jflex</artifactId>
       <version>${project.version}</version>
       <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>de.jflex</groupId>
+      <groupId>com.carrotsearch.thirdparty.jflex</groupId>
       <artifactId>jflex-test-framework</artifactId>
       <version>${project.version}</version>
       <scope>test</scope>
@@ -92,7 +92,7 @@
         <!-- Scanners that tests compile against. This must be the list of specs, not their
              directories: the specs that JFlexTestExtension reads, some of which fail on purpose,
              have no place here. -->
-        <groupId>de.jflex</groupId>
+        <groupId>com.carrotsearch.thirdparty.jflex</groupId>
         <artifactId>jflex-maven-plugin</artifactId>
         <version>${project.version}</version>
         <configuration>
