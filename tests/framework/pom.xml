@@ -8,7 +8,7 @@
   <parent>
     <groupId>com.carrotsearch.thirdparty.jflex</groupId>
     <artifactId>jflex-parent</artifactId>
-    <version>1.10.0-SNAPSHOT</version>
+    <version>1.10.0.2611171317</version>
     <relativePath>../../pom.xml</relativePath>
   </parent>
   <artifactId>jflex-test-framework</artifactId>

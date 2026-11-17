@@ -26,7 +26,7 @@ else
 fi
 
 # Version of JFlex to execute
-JFLEX_VERSION=1.10.0-SNAPSHOT
+JFLEX_VERSION=1.10.0.2611171317
 
 # end configurables
 #

@@ -7,7 +7,7 @@ REM Please adjust JFLEX_HOME and JFLEX_VERSION to suit your needs
 REM (please do not add a trailing backslash)
 
 if not defined JFLEX_HOME set JFLEX_HOME=C:\JFLEX
-if not defined JFLEX_VERSION set JFLEX_VERSION=1.10.0-SNAPSHOT
+if not defined JFLEX_VERSION set JFLEX_VERSION=1.10.0.2611171317
 
 REM Use JAVA_HOME if set, otherwise plain java in the PATH
 set JFLEX_JAVA=java
