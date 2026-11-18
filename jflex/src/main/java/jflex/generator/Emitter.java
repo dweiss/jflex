@@ -40,6 +40,19 @@ public final class Emitter {
   private static final int FINAL = 1;
   private static final int NOLOOK = 8;
 
+  // bit masks for the state attributes that are part of a premultiplied state
+  private static final int PREMULTIPLIED_FINAL = 1;
+  private static final int PREMULTIPLIED_NOLOOK = 2;
+  private static final int PREMULTIPLIED_ATTRIBUTE_BITS = 2;
+
+  /**
+   * The largest transition table, in entries, that is emitted in premultiplied form.
+   *
+   * <p>A premultiplied table has one row per DFA state: identical rows are not shared, because the
+   * row offset identifies the state. The limit keeps the table of larger scanners compact.
+   */
+  private static final int PREMULTIPLIED_MAX_ENTRIES = 1 << 16;
+
   private final File inputFile;
   final String outputFileName;
 
@@ -64,6 +77,16 @@ public final class Emitter {
   private int numCols;
   private int[] colMap;
   private boolean[] colKilled;
+
+  /**
+   * Whether DFA states are emitted in premultiplied form: as the offset of the state's row in the
+   * transition table, shifted left by {@link #PREMULTIPLIED_ATTRIBUTE_BITS}, with the attributes of
+   * the state in the low bits.
+   *
+   * <p>The scanner then needs a single table lookup per input character: neither the row map nor
+   * the attribute table is consulted, and neither is emitted.
+   */
+  private boolean premultiplied;
 
   /** maps actions to their switch label */
   private final Map<Action, Integer> actionTable = new LinkedHashMap<>();
@@ -393,8 +416,14 @@ public final class Emitter {
 
   private void emitNextInput() {
     println("          if (zzCurrentPosL < zzEndReadL) {");
-    println("            zzInput = Character.codePointAt(zzBufferL, zzCurrentPosL, zzEndReadL);");
-    println("            zzCurrentPosL += Character.charCount(zzInput);");
+    println("            zzInput = zzBufferL[zzCurrentPosL++];");
+    println("            if (zzInput >= 0xD800 && zzInput <= 0xDBFF) {");
+    println(
+        "              // high surrogate, possibly the first half of a supplementary code point");
+    println(
+        "              zzInput = Character.codePointAt(zzBufferL, zzCurrentPosL - 1, zzEndReadL);");
+    println("              zzCurrentPosL += Character.charCount(zzInput) - 1;");
+    println("            }");
     println("          }");
     println("          else if (zzAtEOF) {");
     println("            zzInput = YYEOF;");
@@ -491,6 +520,10 @@ public final class Emitter {
     println("   * ZZ_LEXSTATE[l+1] is the state in the DFA for the lexical state l");
     println("   *                  at the beginning of a line");
     println("   * l is of the form l = 2*k, k a non negative integer");
+    if (premultiplied) {
+      println("   *");
+      println("   * States are premultiplied, see ZZ_TRANS.");
+    }
     println("   */");
     println("  private static final int ZZ_LEXSTATE[] = {");
 
@@ -498,7 +531,7 @@ public final class Emitter {
     print("    ");
 
     for (i = 0; i < 2 * dfa.numLexStates() - 1; i++) {
-      print(dfa.entryState(i), 2);
+      print(stateCode(dfa.entryState(i)), 2);
 
       print(", ");
 
@@ -509,8 +542,65 @@ public final class Emitter {
       }
     }
 
-    println(dfa.entryState(i));
+    println(stateCode(dfa.entryState(i)));
     println("  };");
+  }
+
+  /**
+   * Returns the value that represents a DFA state in the generated scanner: the state number, or
+   * its premultiplied form.
+   */
+  private int stateCode(int state) {
+    if (!premultiplied) {
+      return state;
+    }
+    int code = (state * numCols) << PREMULTIPLIED_ATTRIBUTE_BITS;
+    if (dfa.isFinal(state)) code |= PREMULTIPLIED_FINAL;
+    if (!isTransition[state]) code |= PREMULTIPLIED_NOLOOK;
+    return code;
+  }
+
+  /**
+   * Emits the transition table with premultiplied states. Every state has its own row, and the
+   * entries are premultiplied target states.
+   */
+  private void emitPremultipliedTrans() {
+    println("  /**");
+    println(
+        "   * The transition table of the DFA, with one row of " + numCols + " entries per state.");
+    println("   *");
+    println("   * A state is represented by the offset of its row, shifted left by");
+    println(
+        "   * " + PREMULTIPLIED_ATTRIBUTE_BITS + " bits. Bit 0 is set for a final state, bit 1");
+    println("   * for a state without outgoing transitions. -1 stands for no transition.");
+    println("   */");
+
+    // allow values from -1 (translate +1), get emitter capacity based on the largest state code
+    int maxCode = (((dfa.numStates() - 1) * numCols) << PREMULTIPLIED_ATTRIBUTE_BITS) | 3;
+    CountEmitter e = CountEmitter.emitter(maxCode + 1, +1, "trans");
+    e.emitInit();
+
+    int count = 0;
+    int value = 0;
+    for (int i = 0; i < dfa.numStates(); i++) {
+      for (int c = 0; c < dfa.numInput(); c++) {
+        if (!colKilled[c]) {
+          int target = dfa.table(i, c);
+          int code = target == DFA.NO_TARGET ? DFA.NO_TARGET : stateCode(target);
+          if (count > 0 && code != value) {
+            e.emit(count, value);
+            count = 0;
+          }
+          value = code;
+          count++;
+        }
+      }
+    }
+
+    e.emit(count, value);
+    e.emitUnpack();
+
+    println(e.toString());
   }
 
   private void emitDynamicInit() {
@@ -805,9 +895,14 @@ public final class Emitter {
 
     emitSkeletonSection();
 
+    println("    // current state of the DFA; a local, so that it can be kept in a register");
+    println("    int zzState;");
+    println();
     println("    int [] zzTransL = ZZ_TRANS;");
-    println("    int [] zzRowMapL = ZZ_ROWMAP;");
-    println("    int [] zzAttrL = ZZ_ATTRIBUTE;");
+    if (!premultiplied) {
+      println("    int [] zzRowMapL = ZZ_ROWMAP;");
+      println("    int [] zzAttrL = ZZ_ATTRIBUTE;");
+    }
 
     emitSkeletonSection();
 
@@ -933,8 +1028,12 @@ public final class Emitter {
     }
 
     println("      // set up zzAction for empty match case:");
-    println("      int zzAttributes = zzAttrL[zzState];");
-    println("      if ( (zzAttributes & 1) == 1 ) {");
+    if (premultiplied) {
+      println("      if ( " + isFinalExpr("zzState") + " ) {");
+    } else {
+      println("      int zzAttributes = zzAttrL[zzState];");
+      println("      if ( (zzAttributes & 1) == 1 ) {");
+    }
     println("        zzAction = zzState;");
     println("      }");
     println();
@@ -963,20 +1062,51 @@ public final class Emitter {
     println("  }");
   }
 
+  /** Returns the expression for the transition table row of the state in {@code stateVar}. */
+  private String rowExpr(String stateVar) {
+    return premultiplied
+        ? "(" + stateVar + " >> " + PREMULTIPLIED_ATTRIBUTE_BITS + ")"
+        : "zzRowMapL[" + stateVar + "]";
+  }
+
+  /** Returns the expression for whether the state in {@code stateVar} is final. */
+  private String isFinalExpr(String stateVar) {
+    return premultiplied
+        ? "(" + stateVar + " & " + PREMULTIPLIED_FINAL + ") == " + PREMULTIPLIED_FINAL
+        : "(zzAttrL[" + stateVar + "] & " + FINAL + ") == " + FINAL;
+  }
+
   private void emitGetRowMapNext() {
-    println("          int zzNext = zzTransL[ zzRowMapL[zzState] + zzCMap(zzInput) ];");
+    println("          int zzNext = zzTransL[ " + rowExpr("zzState") + " + zzCMap(zzInput) ];");
     println("          if (zzNext == " + DFA.NO_TARGET + ") break zzForAction;");
     println("          zzState = zzNext;");
     println();
 
-    println("          zzAttributes = zzAttrL[zzState];");
+    if (premultiplied) {
+      println("          if ( " + isFinalExpr("zzState") + " ) {");
+    } else {
+      println("          zzAttributes = zzAttrL[zzState];");
 
-    println("          if ( (zzAttributes & " + FINAL + ") == " + FINAL + " ) {");
+      println("          if ( (zzAttributes & " + FINAL + ") == " + FINAL + " ) {");
+    }
 
     emitSkeletonSection();
 
-    println(
-        "            if ( (zzAttributes & " + NOLOOK + ") == " + NOLOOK + " ) break zzForAction;");
+    if (premultiplied) {
+      println(
+          "            if ( (zzState & "
+              + PREMULTIPLIED_NOLOOK
+              + ") == "
+              + PREMULTIPLIED_NOLOOK
+              + " ) break zzForAction;");
+    } else {
+      println(
+          "            if ( (zzAttributes & "
+              + NOLOOK
+              + ") == "
+              + NOLOOK
+              + " ) break zzForAction;");
+    }
 
     emitSkeletonSection();
   }
@@ -1074,7 +1204,17 @@ public final class Emitter {
   }
 
   private void emitActions() {
-    println("        switch (zzAction < 0 ? zzAction : ZZ_ACTION[zzAction]) {");
+    if (premultiplied) {
+      // zzAction is a premultiplied state, ZZ_ACTION is indexed by state number
+      println(
+          "        switch (zzAction < 0 ? zzAction : ZZ_ACTION["
+              + rowExpr("zzAction")
+              + " / "
+              + numCols
+              + "]) {");
+    } else {
+      println("        switch (zzAction < 0 ? zzAction : ZZ_ACTION[zzAction]) {");
+    }
 
     int i = actionTable.size() + 1;
 
@@ -1105,32 +1245,44 @@ public final class Emitter {
 
       if (action.lookAhead() == Action.Kind.GENERAL_LOOK) {
         println("            // general lookahead, find correct zzMarkedPos");
-        println("            { int zzFState = " + dfa.entryState(action.getEntryState()) + ";");
+        println(
+            "            { int zzFState = "
+                + stateCode(dfa.entryState(action.getEntryState()))
+                + ";");
         println("              int zzFPos = zzStartRead;");
         println("              if (zzFin.length <= zzBufferL.length) {");
         println("                zzFin = new boolean[zzBufferL.length+1];");
         println("              }");
         println("              boolean zzFinL[] = zzFin;");
         println("              while (zzFState != -1 && zzFPos < zzMarkedPos) {");
-        println("                zzFinL[zzFPos] = ((zzAttrL[zzFState] & 1) == 1);");
+        println("                zzFinL[zzFPos] = (" + isFinalExpr("zzFState") + ");");
         println("                zzInput = Character.codePointAt(zzBufferL, zzFPos, zzMarkedPos);");
         println("                zzFPos += Character.charCount(zzInput);");
-        println("                zzFState = zzTransL[ zzRowMapL[zzFState] + zzCMap(zzInput) ];");
+        println(
+            "                zzFState = zzTransL[ "
+                + rowExpr("zzFState")
+                + " + zzCMap(zzInput) ];");
         println("              }");
         println("              if (zzFState != -1) {");
-        println("                zzFinL[zzFPos++] = ((zzAttrL[zzFState] & 1) == 1);");
+        println("                zzFinL[zzFPos++] = (" + isFinalExpr("zzFState") + ");");
         println("              }");
         println("              while (zzFPos <= zzMarkedPos) {");
         println("                zzFinL[zzFPos++] = false;");
         println("              }");
         println();
-        println("              zzFState = " + dfa.entryState(action.getEntryState() + 1) + ";");
+        println(
+            "              zzFState = "
+                + stateCode(dfa.entryState(action.getEntryState() + 1))
+                + ";");
         println("              zzFPos = zzMarkedPos;");
-        println("              while (!zzFinL[zzFPos] || (zzAttrL[zzFState] & 1) != 1) {");
+        println("              while (!zzFinL[zzFPos] || !(" + isFinalExpr("zzFState") + ")) {");
         println(
             "                zzInput = Character.codePointBefore(zzBufferL, zzFPos, zzStartRead);");
         println("                zzFPos -= Character.charCount(zzInput);");
-        println("                zzFState = zzTransL[ zzRowMapL[zzFState] + zzCMap(zzInput) ];");
+        println(
+            "                zzFState = zzTransL[ "
+                + rowExpr("zzFState")
+                + " + zzCMap(zzInput) ];");
         println("              };");
         println("              zzMarkedPos = zzFPos;");
         println("            }");
@@ -1357,6 +1509,7 @@ public final class Emitter {
 
     reduceColumns();
     findActionStates();
+    premultiplied = (long) dfa.numStates() * numCols <= PREMULTIPLIED_MAX_ENTRIES;
 
     emitHeader();
     emitUserCode();
@@ -1378,15 +1531,21 @@ public final class Emitter {
 
     emitActionTable();
 
-    reduceRows();
+    if (premultiplied) {
+      emitPremultipliedTrans();
+    } else {
+      reduceRows();
 
-    emitRowMapArray();
+      emitRowMapArray();
 
-    emitDynamicInit();
+      emitDynamicInit();
+    }
 
     emitSkeletonSection();
 
-    emitAttributes();
+    if (!premultiplied) {
+      emitAttributes();
+    }
 
     emitSkeletonSection();
 

@@ -29,9 +29,6 @@
   /** Input device. */
   private java.io.Reader zzReader;
 
-  /** Current state of the DFA. */
-  private int zzState;
-
   /** Current lexical state. */
   private int zzLexicalState = YYINITIAL;
 
